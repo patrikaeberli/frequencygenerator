@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="https://avatars.githubusercontent.com/u/175005826?v=4&size=64">
+    <title>Frequency Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 50px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 18px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        input, label {
+            margin: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Frequency Generator</h1>
+    <label for="duration">Duration </label>
+    <input type="number" id="duration" min="0" max="3" step="0.1" value="1">
+    <br>
+    <label for="freqMin">Min Frequency: </label>
+    <input type="number" id="freqMin" min="20" max="20000" step="10" value="100">
+    <label for="freqMax">Max Frequency: </label>
+    <input type="number" id="freqMax" min="20" max="20000" step="10" value="1100">
+    <br>
+    <button onclick="generateSound()">New</button>
+    <button onclick="playStoredSound()">Play</button>
+    <button onclick="downloadSound()">Download</button>
+    <p id="soundType"></p>
+
+    <script>
+        let storedSound = null;
+
+        function generateSound() {
+            const duration = parseFloat(document.getElementById('duration').value) || 1;
+            const freqMin = parseInt(document.getElementById('freqMin').value) || 100;
+            const freqMax = parseInt(document.getElementById('freqMax').value) || 1100;
+            const types = ['sine', 'square', 'triangle', 'sawtooth'];
+            const randomType = types[Math.floor(Math.random() * types.length)];
+            const randomFreq = Math.floor(Math.random() * (freqMax - freqMin + 1)) + freqMin;
+
+            storedSound = { type: randomType, frequency: randomFreq, duration };
+            document.getElementById('soundType').innerText = `Generated: ${randomType} wave at ${randomFreq}Hz for ${duration}s`;
+            playTone(randomType, randomFreq, duration);
+        }
+
+        function playStoredSound() {
+            if (storedSound) {
+                playTone(storedSound.type, storedSound.frequency, storedSound.duration);
+            }
+        }
+
+        function playTone(type, frequency, duration) {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = type;
+            oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + duration);
+        }
+
+        function downloadSound() {
+            if (!storedSound) return;
+            
+            const sampleRate = 44100;
+            const audioCtx = new OfflineAudioContext(1, sampleRate * storedSound.duration, sampleRate);
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = storedSound.type;
+            oscillator.frequency.setValueAtTime(storedSound.frequency, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + storedSound.duration);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + storedSound.duration);
+
+            audioCtx.startRendering().then((buffer) => {
+                const wavBlob = bufferToWave(buffer, buffer.length);
+                const url = URL.createObjectURL(wavBlob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `pat_${storedSound.frequency}Hz_${storedSound.duration}s_${storedSound.type}.wav`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+        }
+
+        function bufferToWave(buffer, len) {
+            const numOfChan = buffer.numberOfChannels;
+            const length = len * numOfChan * 2 + 44;
+            const bufferArray = new ArrayBuffer(length);
+            const view = new DataView(bufferArray);
+            const channels = [];
+            let offset = 0;
+
+            function writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            writeString(view, offset, 'RIFF'); offset += 4;
+            view.setUint32(offset, length - 8, true); offset += 4;
+            writeString(view, offset, 'WAVE'); offset += 4;
+            writeString(view, offset, 'fmt '); offset += 4;
+            view.setUint32(offset, 16, true); offset += 4;
+            view.setUint16(offset, 1, true); offset += 2;
+            view.setUint16(offset, numOfChan, true); offset += 2;
+            view.setUint32(offset, buffer.sampleRate, true); offset += 4;
+            view.setUint32(offset, buffer.sampleRate * 2 * numOfChan, true); offset += 4;
+            view.setUint16(offset, numOfChan * 2, true); offset += 2;
+            view.setUint16(offset, 16, true); offset += 2;
+            writeString(view, offset, 'data'); offset += 4;
+            view.setUint32(offset, length - offset - 4, true); offset += 4;
+
+            for (let i = 0; i < buffer.numberOfChannels; i++) {
+                channels.push(buffer.getChannelData(i));
+            }
+
+            let sample;
+            for (let i = 0; i < len; i++) {
+                for (let channel = 0; channel < numOfChan; channel++) {
+                    sample = Math.max(-1, Math.min(1, channels[channel][i]));
+                    sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                    view.setInt16(offset, sample, true);
+                    offset += 2;
+                }
+            }
+
+            return new Blob([bufferArray], { type: 'audio/wav' });
+        }
+    </script>
+</body>
+</html>
